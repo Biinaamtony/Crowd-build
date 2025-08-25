@@ -32,5 +32,41 @@
 
 ;; Helper to get transfer amount (Clarinet test only)
 (define-read-only (stx-get-transfer-amount) (ok u1000)) ;; Placeholder for testing
+;; Deposit rental income (owner only)
+(define-public (deposit-rental-income (amount uint))
+	(begin
+		(asserts! (is-eq tx-sender contract-owner) (err u401))
+		(var-set total-rental-income (+ (var-get total-rental-income) amount))
+		(ok (var-get total-rental-income))
+	)
+)
+
+;; Distribute rental income to all token holders
+(define-public (distribute-income)
+	(begin
+		(asserts! (is-eq tx-sender contract-owner) (err u401))
+		;; For demo: distribute equally to all holders (real: proportional)
+		;; Placeholder: distribute to tx-sender only for now
+		(let ((holder tx-sender)
+			  (income (var-get total-rental-income)))
+			(map-set unclaimed-income ((address holder)) ((amount income)))
+			(var-set total-rental-income u0)
+			(ok income)
+		)
+	)
+)
+
+;; Claim rental income
+(define-public (claim-income)
+	(let ((income (default-to u0 (get amount (map-get? unclaimed-income ((address tx-sender)))))))
+		(if (> income u0)
+			(begin
+				(map-set unclaimed-income ((address tx-sender)) ((amount u0)))
+				(stx-transfer? income contract-owner tx-sender)
+			)
+			(err u404)
+		)
+	)
+)
 
 ;; ...existing code...
