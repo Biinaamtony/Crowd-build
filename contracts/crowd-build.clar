@@ -195,3 +195,133 @@
         )
     )
 )
+
+;; Final commit features: Advanced contract management
+
+;; Voting mechanism for property decisions
+(define-map property-votes principal uint)
+(define-data-var current-proposal (string-ascii 256) "")
+(define-data-var voting-deadline uint u0)
+
+;; Submit a property proposal (owner only)
+(define-public (submit-proposal (proposal (string-ascii 256)) (deadline uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) ERR-UNAUTHORIZED)
+        (asserts! (> deadline block-height) ERR-INVALID-AMOUNT)
+        (var-set current-proposal proposal)
+        (var-set voting-deadline deadline)
+        (ok true)
+    )
+)
+
+;; Vote on current proposal (token holders only)
+(define-public (vote (support bool))
+    (begin
+        (asserts! (> (ft-get-balance crowdbuild-token tx-sender) u0) ERR-NO-TOKENS)
+        (asserts! (<= block-height (var-get voting-deadline)) ERR-INVALID-AMOUNT)
+        (let ((vote-weight (ft-get-balance crowdbuild-token tx-sender)))
+            (map-set property-votes tx-sender (if support vote-weight u0))
+            (ok vote-weight)
+        )
+    )
+)
+
+;; Get proposal information
+(define-read-only (get-current-proposal)
+    (ok (var-get current-proposal))
+)
+
+;; Get voting deadline
+(define-read-only (get-voting-deadline)
+    (var-get voting-deadline)
+)
+
+;; Property maintenance fund
+(define-data-var maintenance-fund uint u0)
+
+;; Contribute to maintenance fund
+(define-public (contribute-to-maintenance (amount uint))
+    (begin
+        (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+        (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+        (var-set maintenance-fund (+ (var-get maintenance-fund) amount))
+        (ok (var-get maintenance-fund))
+    )
+)
+
+;; Use maintenance fund (owner only)
+(define-public (use-maintenance-fund (amount uint) (recipient principal))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) ERR-UNAUTHORIZED)
+        (asserts! (>= (var-get maintenance-fund) amount) ERR-INSUFFICIENT-BALANCE)
+        (var-set maintenance-fund (- (var-get maintenance-fund) amount))
+        (try! (as-contract (stx-transfer? amount tx-sender recipient)))
+        (ok amount)
+    )
+)
+
+;; Get maintenance fund balance
+(define-read-only (get-maintenance-fund)
+    (var-get maintenance-fund)
+)
+
+;; Property metrics tracking
+(define-data-var total-properties uint u1)
+(define-data-var occupancy-rate uint u100) ;; Percentage (0-100)
+
+;; Update property metrics (owner only)
+(define-public (update-property-metrics (properties uint) (occupancy uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) ERR-UNAUTHORIZED)
+        (asserts! (> properties u0) ERR-INVALID-AMOUNT)
+        (asserts! (<= occupancy u100) ERR-INVALID-AMOUNT)
+        (var-set total-properties properties)
+        (var-set occupancy-rate occupancy)
+        (ok true)
+    )
+)
+
+;; Get property metrics
+(define-read-only (get-property-metrics)
+    (ok {
+        total-properties: (var-get total-properties),
+        occupancy-rate: (var-get occupancy-rate),
+        property-value: (var-get property-value)
+    })
+)
+
+;; Calculate expected annual return based on occupancy
+(define-read-only (get-expected-return)
+    (let ((annual-rent (/ (* (var-get property-value) u8) u100)) ;; 8% of property value
+          (occupancy (var-get occupancy-rate)))
+        (/ (* annual-rent occupancy) u100)
+    )
+)
+
+;; Token holder dividend history
+(define-map dividend-history principal (list 10 uint))
+
+;; Record dividend payment
+(define-private (record-dividend (recipient principal) (amount uint))
+    (let ((history (default-to (list) (map-get? dividend-history recipient))))
+        (map-set dividend-history recipient (unwrap-panic (as-max-len? (append history amount) u10)))
+        amount
+    )
+)
+
+;; Get dividend history for a user
+(define-read-only (get-dividend-history (user principal))
+    (default-to (list) (map-get? dividend-history user))
+)
+
+;; Contract statistics
+(define-read-only (get-contract-stats)
+    (ok {
+        total-token-supply: (ft-get-supply crowdbuild-token),
+        total-holders: u1, ;; Simplified - would need iterator in real implementation
+        contract-balance: (stx-get-balance (as-contract tx-sender)),
+        rental-income: (var-get total-rental-income),
+        maintenance-fund: (var-get maintenance-fund),
+        property-value: (var-get property-value)
+    })
+)
