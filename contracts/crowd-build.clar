@@ -119,3 +119,79 @@
 (define-read-only (is-holder (user principal))
     (default-to false (map-get? holders user))
 )
+
+;; Advanced features for commit 4
+
+;; Update property value (owner only)
+(define-public (update-property-value (new-value uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) ERR-UNAUTHORIZED)
+        (asserts! (> new-value u0) ERR-INVALID-AMOUNT)
+        (var-set property-value new-value)
+        (ok new-value)
+    )
+)
+
+;; Emergency withdraw function (owner only)
+(define-public (emergency-withdraw)
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) ERR-UNAUTHORIZED)
+        (let ((contract-balance (stx-get-balance (as-contract tx-sender))))
+            (try! (as-contract (stx-transfer? contract-balance tx-sender contract-owner)))
+            (ok contract-balance)
+        )
+    )
+)
+
+;; Burn tokens (reduce total supply)
+(define-public (burn-tokens (amount uint))
+    (begin
+        (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+        (asserts! (>= (ft-get-balance crowdbuild-token tx-sender) amount) ERR-INSUFFICIENT-BALANCE)
+        (try! (ft-burn? crowdbuild-token amount tx-sender))
+        (ok amount)
+    )
+)
+
+;; Get contract STX balance
+(define-read-only (get-contract-balance)
+    (stx-get-balance (as-contract tx-sender))
+)
+
+;; Calculate token price based on property value and supply
+(define-read-only (get-token-price)
+    (let ((total-supply (ft-get-supply crowdbuild-token))
+          (property-val (var-get property-value)))
+        (if (is-eq total-supply u0)
+            u1 ;; Default price of 1 uSTX per token
+            (/ property-val total-supply)
+        )
+    )
+)
+
+;; Batch distribute income to multiple recipients
+(define-public (batch-distribute-income (recipients (list 10 principal)))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) ERR-UNAUTHORIZED)
+        (let ((income (var-get total-rental-income)))
+            (asserts! (> income u0) ERR-NO-INCOME)
+            (ok (map distribute-to-holder recipients))
+        )
+    )
+)
+
+;; Helper function for batch distribution
+(define-private (distribute-to-holder (recipient principal))
+    (let ((total-supply (ft-get-supply crowdbuild-token))
+          (income (var-get total-rental-income))
+          (holder-balance (ft-get-balance crowdbuild-token recipient)))
+        (if (and (> total-supply u0) (> holder-balance u0))
+            (let ((share (/ (* income holder-balance) total-supply)))
+                (map-set unclaimed-income recipient 
+                    (+ (default-to u0 (map-get? unclaimed-income recipient)) share))
+                share
+            )
+            u0
+        )
+    )
+)
