@@ -544,3 +544,332 @@ Clarinet.test({
         assertEquals(isSuccessful || isInsufficientBalance, true);
     },
 });
+
+// Test Suite 7: Advanced Contract Features
+Clarinet.test({
+    name: "Property Value: Owner can update property value",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const newValue = 2000000; // 2 million uSTX
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'update-property-value', [types.uint(newValue)], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts.length, 1);
+        assertEquals(block.receipts[0].result, `(ok u${newValue})`);
+        
+        // Verify property value updated
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-property-value', [], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `u${newValue}`);
+    },
+});
+
+Clarinet.test({
+    name: "Property Value: Non-owner cannot update property value",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const wallet1 = accounts.get('wallet_1')!;
+        const newValue = 2000000;
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'update-property-value', [types.uint(newValue)], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u401)'); // ERR-UNAUTHORIZED
+    },
+});
+
+Clarinet.test({
+    name: "Property Value: Cannot update to zero value",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'update-property-value', [types.uint(0)], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u403)'); // ERR-INVALID-AMOUNT
+    },
+});
+
+Clarinet.test({
+    name: "Token Price: Calculate token price based on property value and supply",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const propertyValue = 1000000;
+        const tokenSupply = 100000;
+        
+        // Set property value and create token supply
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'update-property-value', [types.uint(propertyValue)], deployer.address),
+            Tx.contractCall('crowd-build', 'invest', [types.uint(tokenSupply)], wallet1.address)
+        ]);
+        
+        // Calculate expected price: property_value / total_supply
+        const expectedPrice = Math.floor(propertyValue / tokenSupply);
+        
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-token-price', [], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `u${expectedPrice}`);
+    },
+});
+
+Clarinet.test({
+    name: "Token Price: Default price when no tokens exist",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-token-price', [], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, 'u1'); // Default price of 1 uSTX per token
+    },
+});
+
+// Test Suite 8: Token Burning
+Clarinet.test({
+    name: "Burn Tokens: User can burn their own tokens",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const wallet1 = accounts.get('wallet_1')!;
+        const investAmount = 1000;
+        const burnAmount = 300;
+        
+        // First invest to get tokens
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet1.address)
+        ]);
+        
+        // Burn some tokens
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'burn-tokens', [types.uint(burnAmount)], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `(ok u${burnAmount})`);
+        
+        // Verify remaining balance
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-balance', [types.principal(wallet1.address)], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `(ok u${investAmount - burnAmount})`);
+        
+        // Verify total supply decreased
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-total-supply', [], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `(ok u${investAmount - burnAmount})`);
+    },
+});
+
+Clarinet.test({
+    name: "Burn Tokens: Cannot burn more tokens than owned",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const wallet1 = accounts.get('wallet_1')!;
+        const investAmount = 500;
+        const burnAmount = 1000; // More than owned
+        
+        // Invest first
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet1.address)
+        ]);
+        
+        // Try to burn more than owned
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'burn-tokens', [types.uint(burnAmount)], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u402)'); // ERR-INSUFFICIENT-BALANCE
+    },
+});
+
+Clarinet.test({
+    name: "Burn Tokens: Cannot burn zero tokens",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const wallet1 = accounts.get('wallet_1')!;
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'burn-tokens', [types.uint(0)], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u403)'); // ERR-INVALID-AMOUNT  
+    },
+});
+
+// Test Suite 9: Contract Balance and Emergency Functions
+Clarinet.test({
+    name: "Contract Balance: Get contract STX balance",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const investAmount = 2000;
+        
+        // Check initial balance (should be 0)
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-contract-balance', [], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, 'u0');
+        
+        // Invest to add STX to contract
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet1.address)
+        ]);
+        
+        // Check balance after investment
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-contract-balance', [], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `u${investAmount}`);
+    },
+});
+
+Clarinet.test({
+    name: "Emergency Withdraw: Owner can emergency withdraw contract funds",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const investAmount = 1500;
+        
+        // Add funds to contract
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet1.address)
+        ]);
+        
+        // Emergency withdraw
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'emergency-withdraw', [], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `(ok u${investAmount})`);
+        
+        // Verify contract balance is now zero
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-contract-balance', [], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, 'u0');
+    },
+});
+
+Clarinet.test({
+    name: "Emergency Withdraw: Non-owner cannot emergency withdraw",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const wallet1 = accounts.get('wallet_1')!;
+        const investAmount = 1000;
+        
+        // Add funds to contract
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet1.address)
+        ]);
+        
+        // Non-owner tries emergency withdraw
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'emergency-withdraw', [], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u401)'); // ERR-UNAUTHORIZED
+    },
+});
+
+// Test Suite 10: Batch Distribution
+Clarinet.test({
+    name: "Batch Distribution: Owner can distribute to multiple recipients",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const wallet2 = accounts.get('wallet_2')!;
+        const wallet3 = accounts.get('wallet_3')!;
+        const investAmount = 1000;
+        const rentalAmount = 3000;
+        
+        // Setup investments and rental income
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet1.address),
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet2.address),
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet3.address),
+            Tx.contractCall('crowd-build', 'deposit-rental-income', [types.uint(rentalAmount)], deployer.address)
+        ]);
+        
+        // Batch distribute to multiple recipients
+        const recipients = [wallet1.address, wallet2.address, wallet3.address];
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'batch-distribute-income', [
+                types.list(recipients.map(addr => types.principal(addr)))
+            ], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts.length, 1);
+        assertEquals(block.receipts[0].result.includes('(ok'), true);
+        
+        // Verify each recipient has unclaimed income
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-unclaimed-income', [types.principal(wallet1.address)], deployer.address),
+            Tx.contractCall('crowd-build', 'get-unclaimed-income', [types.principal(wallet2.address)], deployer.address),
+            Tx.contractCall('crowd-build', 'get-unclaimed-income', [types.principal(wallet3.address)], deployer.address)
+        ]);
+        
+        // Each should get equal share (1000 each from 3000 total, equally distributed among 3000 total tokens)
+        const expectedShare = Math.floor((rentalAmount * investAmount) / (investAmount * 3));
+        assertEquals(block.receipts[0].result, `u${expectedShare}`);
+        assertEquals(block.receipts[1].result, `u${expectedShare}`);
+        assertEquals(block.receipts[2].result, `u${expectedShare}`);
+    },
+});
+
+Clarinet.test({
+    name: "Batch Distribution: Non-owner cannot batch distribute",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const wallet2 = accounts.get('wallet_2')!;
+        const investAmount = 1000;
+        const rentalAmount = 2000;
+        
+        // Setup
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet1.address),
+            Tx.contractCall('crowd-build', 'deposit-rental-income', [types.uint(rentalAmount)], deployer.address)
+        ]);
+        
+        // Non-owner tries batch distribution
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'batch-distribute-income', [
+                types.list([types.principal(wallet1.address)])
+            ], wallet2.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u401)'); // ERR-UNAUTHORIZED
+    },
+});
+
+Clarinet.test({
+    name: "Batch Distribution: Cannot distribute with no rental income",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const investAmount = 1000;
+        
+        // Setup investment but no rental income
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet1.address)
+        ]);
+        
+        // Try batch distribution without rental income
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'batch-distribute-income', [
+                types.list([types.principal(wallet1.address)])
+            ], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u404)'); // ERR-NO-INCOME
+    },
+});
