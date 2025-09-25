@@ -873,3 +873,503 @@ Clarinet.test({
         assertEquals(block.receipts[0].result, '(err u404)'); // ERR-NO-INCOME
     },
 });
+
+// Test Suite 11: Governance and Voting System
+Clarinet.test({
+    name: "Governance: Owner can submit proposals",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const proposal = "Renovate kitchen and bathrooms";
+        const deadline = 1000; // Block height deadline
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'submit-proposal', [
+                types.ascii(proposal),
+                types.uint(deadline)
+            ], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts.length, 1);
+        assertEquals(block.receipts[0].result, '(ok true)');
+        
+        // Verify proposal was set
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-current-proposal', [], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `(ok "${proposal}")`);
+        
+        // Verify deadline was set
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-voting-deadline', [], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `u${deadline}`);
+    },
+});
+
+Clarinet.test({
+    name: "Governance: Non-owner cannot submit proposals",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const wallet1 = accounts.get('wallet_1')!;
+        const proposal = "Bad proposal";
+        const deadline = 1000;
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'submit-proposal', [
+                types.ascii(proposal),
+                types.uint(deadline)
+            ], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u401)'); // ERR-UNAUTHORIZED
+    },
+});
+
+Clarinet.test({
+    name: "Governance: Cannot submit proposal with past deadline",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const proposal = "Test proposal";
+        const pastDeadline = 1; // Block height in the past
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'submit-proposal', [
+                types.ascii(proposal),
+                types.uint(pastDeadline)
+            ], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u403)'); // ERR-INVALID-AMOUNT
+    },
+});
+
+Clarinet.test({
+    name: "Governance: Token holders can vote on proposals",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const investAmount = 1000;
+        const proposal = "Test proposal";
+        const deadline = 1000;
+        
+        // Setup: invest to get tokens and submit proposal
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet1.address),
+            Tx.contractCall('crowd-build', 'submit-proposal', [
+                types.ascii(proposal),
+                types.uint(deadline)
+            ], deployer.address)
+        ]);
+        
+        // Vote in favor
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'vote', [types.bool(true)], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `(ok u${investAmount})`); // Vote weight equals token balance
+    },
+});
+
+Clarinet.test({
+    name: "Governance: Non-token holders cannot vote",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const proposal = "Test proposal";
+        const deadline = 1000;
+        
+        // Submit proposal but don't invest
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'submit-proposal', [
+                types.ascii(proposal),
+                types.uint(deadline)
+            ], deployer.address)
+        ]);
+        
+        // Try to vote without tokens
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'vote', [types.bool(true)], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u405)'); // ERR-NO-TOKENS
+    },
+});
+
+Clarinet.test({
+    name: "Governance: Cannot vote after deadline",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const investAmount = 1000;
+        const proposal = "Test proposal";
+        const deadline = 5; // Early deadline
+        
+        // Setup investment and proposal
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet1.address),
+            Tx.contractCall('crowd-build', 'submit-proposal', [
+                types.ascii(proposal),
+                types.uint(deadline)
+            ], deployer.address)
+        ]);
+        
+        // Mine enough blocks to pass deadline
+        for (let i = 0; i < 10; i++) {
+            chain.mineBlock([]);
+        }
+        
+        // Try to vote after deadline
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'vote', [types.bool(true)], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u403)'); // ERR-INVALID-AMOUNT (deadline passed)
+    },
+});
+
+// Test Suite 12: Maintenance Fund Management
+Clarinet.test({
+    name: "Maintenance Fund: Users can contribute to maintenance fund",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const wallet1 = accounts.get('wallet_1')!;
+        const contribution = 500;
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'contribute-to-maintenance', [types.uint(contribution)], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `(ok u${contribution})`);
+        
+        // Verify maintenance fund balance
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-maintenance-fund', [], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `u${contribution}`);
+    },
+});
+
+Clarinet.test({
+    name: "Maintenance Fund: Cannot contribute zero amount",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const wallet1 = accounts.get('wallet_1')!;
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'contribute-to-maintenance', [types.uint(0)], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u403)'); // ERR-INVALID-AMOUNT
+    },
+});
+
+Clarinet.test({
+    name: "Maintenance Fund: Multiple contributions accumulate",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const wallet1 = accounts.get('wallet_1')!;
+        const wallet2 = accounts.get('wallet_2')!;
+        const contrib1 = 300;
+        const contrib2 = 700;
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'contribute-to-maintenance', [types.uint(contrib1)], wallet1.address),
+            Tx.contractCall('crowd-build', 'contribute-to-maintenance', [types.uint(contrib2)], wallet2.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `(ok u${contrib1})`);
+        assertEquals(block.receipts[1].result, `(ok u${contrib1 + contrib2})`);
+        
+        // Verify total fund
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-maintenance-fund', [], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `u${contrib1 + contrib2}`);
+    },
+});
+
+Clarinet.test({
+    name: "Maintenance Fund: Owner can use maintenance fund",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const wallet2 = accounts.get('wallet_2')!;
+        const contribution = 1000;
+        const usage = 400;
+        
+        // Setup maintenance fund
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'contribute-to-maintenance', [types.uint(contribution)], wallet1.address)
+        ]);
+        
+        // Owner uses fund
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'use-maintenance-fund', [
+                types.uint(usage),
+                types.principal(wallet2.address)
+            ], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `(ok u${usage})`);
+        
+        // Verify remaining fund
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-maintenance-fund', [], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, `u${contribution - usage}`);
+    },
+});
+
+Clarinet.test({
+    name: "Maintenance Fund: Non-owner cannot use maintenance fund",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const wallet1 = accounts.get('wallet_1')!;
+        const wallet2 = accounts.get('wallet_2')!;
+        const contribution = 1000;
+        const usage = 400;
+        
+        // Setup fund
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'contribute-to-maintenance', [types.uint(contribution)], wallet1.address)
+        ]);
+        
+        // Non-owner tries to use fund
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'use-maintenance-fund', [
+                types.uint(usage),
+                types.principal(wallet2.address)
+            ], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u401)'); // ERR-UNAUTHORIZED
+    },
+});
+
+Clarinet.test({
+    name: "Maintenance Fund: Cannot use more than available fund",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const wallet2 = accounts.get('wallet_2')!;
+        const contribution = 500;
+        const usage = 1000; // More than available
+        
+        // Setup small fund
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'contribute-to-maintenance', [types.uint(contribution)], wallet1.address)
+        ]);
+        
+        // Try to use more than available
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'use-maintenance-fund', [
+                types.uint(usage),
+                types.principal(wallet2.address)
+            ], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u402)'); // ERR-INSUFFICIENT-BALANCE
+    },
+});
+
+// Test Suite 13: Property Metrics and Analytics
+Clarinet.test({
+    name: "Property Metrics: Owner can update property metrics",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const properties = 5;
+        const occupancy = 85; // 85% occupancy
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'update-property-metrics', [
+                types.uint(properties),
+                types.uint(occupancy)
+            ], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(ok true)');
+        
+        // Verify metrics
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-property-metrics', [], deployer.address)
+        ]);
+        
+        const expectedResult = `(ok {occupancy-rate: u${occupancy}, property-value: u1000000, total-properties: u${properties}})`;
+        assertEquals(block.receipts[0].result, expectedResult);
+    },
+});
+
+Clarinet.test({
+    name: "Property Metrics: Non-owner cannot update metrics",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const wallet1 = accounts.get('wallet_1')!;
+        const properties = 3;
+        const occupancy = 90;
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'update-property-metrics', [
+                types.uint(properties),
+                types.uint(occupancy)
+            ], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u401)'); // ERR-UNAUTHORIZED
+    },
+});
+
+Clarinet.test({
+    name: "Property Metrics: Cannot set zero properties",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const occupancy = 80;
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'update-property-metrics', [
+                types.uint(0),
+                types.uint(occupancy)
+            ], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u403)'); // ERR-INVALID-AMOUNT
+    },
+});
+
+Clarinet.test({
+    name: "Property Metrics: Cannot set occupancy over 100%",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const properties = 2;
+        const occupancy = 150; // Invalid - over 100%
+        
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'update-property-metrics', [
+                types.uint(properties),
+                types.uint(occupancy)
+            ], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '(err u403)'); // ERR-INVALID-AMOUNT
+    },
+});
+
+Clarinet.test({
+    name: "Expected Returns: Calculate expected annual return based on occupancy",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const propertyValue = 1000000;
+        const occupancy = 80; // 80% occupancy
+        
+        // Set property metrics
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'update-property-value', [types.uint(propertyValue)], deployer.address),
+            Tx.contractCall('crowd-build', 'update-property-metrics', [
+                types.uint(1),
+                types.uint(occupancy)
+            ], deployer.address)
+        ]);
+        
+        // Calculate expected return
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-expected-return', [], deployer.address)
+        ]);
+        
+        // Expected: (property_value * 8% * occupancy%) / 100
+        // = (1000000 * 8 * 80) / 10000 = 64000
+        const expectedReturn = Math.floor((propertyValue * 8 * occupancy) / 10000);
+        assertEquals(block.receipts[0].result, `u${expectedReturn}`);
+    },
+});
+
+// Test Suite 14: Contract Statistics and Analytics
+Clarinet.test({
+    name: "Contract Stats: Get comprehensive contract statistics",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const investAmount = 2000;
+        const rentalAmount = 1000;
+        const maintenanceAmount = 500;
+        const propertyValue = 1500000;
+        
+        // Setup contract state
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'invest', [types.uint(investAmount)], wallet1.address),
+            Tx.contractCall('crowd-build', 'deposit-rental-income', [types.uint(rentalAmount)], deployer.address),
+            Tx.contractCall('crowd-build', 'contribute-to-maintenance', [types.uint(maintenanceAmount)], wallet1.address),
+            Tx.contractCall('crowd-build', 'update-property-value', [types.uint(propertyValue)], deployer.address)
+        ]);
+        
+        // Get contract stats
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-contract-stats', [], deployer.address)
+        ]);
+        
+        const expectedStats = `(ok {contract-balance: u${investAmount + maintenanceAmount}, maintenance-fund: u${maintenanceAmount}, property-value: u${propertyValue}, rental-income: u${rentalAmount}, total-holders: u1, total-token-supply: u${investAmount}})`;
+        assertEquals(block.receipts[0].result, expectedStats);
+    },
+});
+
+Clarinet.test({
+    name: "Dividend History: Get dividend history for users",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const wallet1 = accounts.get('wallet_1')!;
+        
+        // Get initial empty dividend history
+        let block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-dividend-history', [types.principal(wallet1.address)], wallet1.address)
+        ]);
+        
+        assertEquals(block.receipts[0].result, '[]'); // Empty list initially
+    },
+});
+
+Clarinet.test({
+    name: "Integration: Complete investment and distribution cycle",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const wallet1 = accounts.get('wallet_1')!;
+        const wallet2 = accounts.get('wallet_2')!;
+        const invest1 = 1500;
+        const invest2 = 2500;
+        const rental = 2000;
+        const maintenance = 300;
+        
+        // Complete investment cycle
+        let block = chain.mineBlock([
+            // Investments
+            Tx.contractCall('crowd-build', 'invest', [types.uint(invest1)], wallet1.address),
+            Tx.contractCall('crowd-build', 'invest', [types.uint(invest2)], wallet2.address),
+            
+            // Income and maintenance
+            Tx.contractCall('crowd-build', 'deposit-rental-income', [types.uint(rental)], deployer.address),
+            Tx.contractCall('crowd-build', 'contribute-to-maintenance', [types.uint(maintenance)], wallet1.address),
+            
+            // Distribution
+            Tx.contractCall('crowd-build', 'distribute-income', [types.principal(wallet1.address)], deployer.address),
+            Tx.contractCall('crowd-build', 'distribute-income', [types.principal(wallet2.address)], deployer.address)
+        ]);
+        
+        assertEquals(block.receipts.length, 6);
+        assertEquals(block.receipts[0].result, `(ok u${invest1})`); // Investment 1
+        assertEquals(block.receipts[1].result, `(ok u${invest2})`); // Investment 2
+        assertEquals(block.receipts[2].result, `(ok u${rental})`);  // Rental deposit
+        assertEquals(block.receipts[3].result, `(ok u${maintenance})`); // Maintenance contribution
+        
+        // Check proportional distributions
+        const totalTokens = invest1 + invest2;
+        const expectedShare1 = Math.floor((rental * invest1) / totalTokens);
+        const expectedShare2 = Math.floor((rental * invest2) / totalTokens);
+        
+        assertEquals(block.receipts[4].result, `(ok u${expectedShare1})`);
+        assertEquals(block.receipts[5].result, `(ok u${expectedShare2})`);
+        
+        // Verify final contract state
+        block = chain.mineBlock([
+            Tx.contractCall('crowd-build', 'get-contract-stats', [], deployer.address)
+        ]);
+        
+        const contractBalance = invest1 + invest2 + maintenance;
+        const expectedFinalStats = `(ok {contract-balance: u${contractBalance}, maintenance-fund: u${maintenance}, property-value: u1000000, rental-income: u${rental}, total-holders: u1, total-token-supply: u${totalTokens}})`;
+        assertEquals(block.receipts[0].result, expectedFinalStats);
+    },
+});
